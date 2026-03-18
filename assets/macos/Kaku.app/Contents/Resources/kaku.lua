@@ -2725,6 +2725,10 @@ wezterm.on('user-var-changed', function(window, pane, name, value)
     ai_debug_log("user-var-changed ignored exit_code=130")
     return
   end
+  if exit_code == 141 then
+    ai_debug_log("user-var-changed ignored exit_code=141")
+    return
+  end
 
   local pane_id_ok, pane_id_value = pcall(function()
     return pane:pane_id()
