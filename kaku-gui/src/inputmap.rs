@@ -181,7 +181,7 @@ impl InputMap {
                         streak: 1,
                         button: MouseButton::Left
                     },
-                    CompleteSelectionOrOpenLinkAtMouseCursor(
+                    CompleteSelection(
                         ClipboardCopyDestination::ClipboardAndPrimarySelection
                     )
                 ],
@@ -195,9 +195,21 @@ impl InputMap {
                         streak: 1,
                         button: MouseButton::Left
                     },
-                    CompleteSelectionOrOpenLinkAtMouseCursor(
+                    CompleteSelection(
                         ClipboardCopyDestination::ClipboardAndPrimarySelection
                     )
+                ],
+                [
+                    MouseEventTriggerMods {
+                        mods: Modifiers::SUPER,
+                        mouse_reporting: false,
+                        alt_screen: MouseEventAltScreen::Any,
+                    },
+                    MouseEventTrigger::Up {
+                        streak: 1,
+                        button: MouseButton::Left
+                    },
+                    OpenLinkAtMouseCursor
                 ],
                 [
                     MouseEventTriggerMods {
@@ -233,7 +245,7 @@ impl InputMap {
                         streak: 1,
                         button: MouseButton::Left
                     },
-                    CompleteSelectionOrOpenLinkAtMouseCursor(
+                    CompleteSelection(
                         ClipboardCopyDestination::PrimarySelection
                     )
                 ],
