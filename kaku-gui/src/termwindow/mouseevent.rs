@@ -57,6 +57,13 @@ fn should_zoom_title_area(
         && click_streak == Some(2)
 }
 
+fn tab_bar_item_starts_window_drag(item: TabBarItem) -> bool {
+    matches!(
+        item,
+        TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus
+    )
+}
+
 fn should_preserve_tmux_bypass_reporting(
     is_wheel_event: bool,
     modifiers: window::Modifiers,
@@ -448,6 +455,11 @@ impl super::TermWindow {
                     self.is_window_dragging = false;
                     let had_manual_drag_anchor = self.window_drag_position.take().is_some();
                     if had_manual_drag_anchor || was_dragging_window {
+                        if let Some(state) = self.tab_drag_state.take() {
+                            if state.has_dragged {
+                                self.start_tab_settle_animation(state.tab_idx, state.drag_offset_x);
+                            }
+                        }
                         // Completed a window drag
                         self.finish_mouse_release(*press);
                         return;
@@ -936,72 +948,79 @@ impl super::TermWindow {
         context: &dyn WindowOps,
     ) {
         match event.kind {
-            WMEK::Press(MousePress::Left) => match item {
-                TabBarItem::Tab { tab_idx, active } => {
-                    if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
-                        self.tab_drag_state = None;
-                        if let Err(err) = self.begin_tab_rename(tab_idx, ui_item) {
-                            log::debug!("begin_tab_rename({tab_idx}) failed: {err:#}");
-                        }
-                        context.set_cursor(Some(MouseCursor::Arrow));
-                        return;
-                    }
-                    if !active {
-                        if let Err(err) = self.activate_tab(tab_idx as isize) {
-                            log::debug!("activate_tab({tab_idx}) failed: {err:#}");
-                        }
-                    }
-                    self.start_tab_drag(tab_idx, event.clone());
+            WMEK::Press(MousePress::Left) => {
+                if !tab_bar_item_starts_window_drag(item) {
+                    self.is_window_dragging = false;
+                    self.window_drag_position = None;
                 }
-                TabBarItem::NewTabButton { .. } => {
-                    self.tab_drag_state = None;
-                    self.do_new_tab_button_click(MousePress::Left);
-                }
-                TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
-                    self.tab_drag_state = None;
-                    let maximized = self
-                        .window_state
-                        .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN);
-                    if let Some(ref window) = self.window {
-                        if should_zoom_title_area(
-                            self.config.window_decorations,
-                            self.last_mouse_click.as_ref().map(|c| c.streak),
-                        ) {
-                            if maximized {
-                                window.restore();
-                            } else {
-                                window.maximize();
+
+                match item {
+                    TabBarItem::Tab { tab_idx, active } => {
+                        if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
+                            self.tab_drag_state = None;
+                            if let Err(err) = self.begin_tab_rename(tab_idx, ui_item) {
+                                log::debug!("begin_tab_rename({tab_idx}) failed: {err:#}");
                             }
+                            context.set_cursor(Some(MouseCursor::Arrow));
                             return;
                         }
+                        if !active {
+                            if let Err(err) = self.activate_tab(tab_idx as isize) {
+                                log::debug!("activate_tab({tab_idx}) failed: {err:#}");
+                            }
+                        }
+                        self.start_tab_drag(tab_idx, event.clone());
                     }
-                    self.is_window_dragging = true;
-                    if !maximized && !cfg!(target_os = "macos") {
-                        self.window_drag_position.replace(event.clone());
+                    TabBarItem::NewTabButton { .. } => {
+                        self.tab_drag_state = None;
+                        self.do_new_tab_button_click(MousePress::Left);
                     }
-                    context.request_drag_move();
-                }
-                TabBarItem::WindowButton(button) => {
-                    self.tab_drag_state = None;
-                    use window::IntegratedTitleButton as Button;
-                    if let Some(ref window) = self.window {
-                        match button {
-                            Button::Hide => window.hide(),
-                            Button::Maximize => {
-                                let maximized = self
-                                    .window_state
-                                    .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN);
+                    TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
+                        self.tab_drag_state = None;
+                        let maximized = self
+                            .window_state
+                            .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN);
+                        if let Some(ref window) = self.window {
+                            if should_zoom_title_area(
+                                self.config.window_decorations,
+                                self.last_mouse_click.as_ref().map(|c| c.streak),
+                            ) {
                                 if maximized {
                                     window.restore();
                                 } else {
                                     window.maximize();
                                 }
+                                return;
                             }
-                            Button::Close => self.close_requested(&window.clone()),
+                        }
+                        self.is_window_dragging = true;
+                        if !maximized && !cfg!(target_os = "macos") {
+                            self.window_drag_position.replace(event.clone());
+                        }
+                        context.request_drag_move();
+                    }
+                    TabBarItem::WindowButton(button) => {
+                        self.tab_drag_state = None;
+                        use window::IntegratedTitleButton as Button;
+                        if let Some(ref window) = self.window {
+                            match button {
+                                Button::Hide => window.hide(),
+                                Button::Maximize => {
+                                    let maximized = self.window_state.intersects(
+                                        WindowState::MAXIMIZED | WindowState::FULL_SCREEN,
+                                    );
+                                    if maximized {
+                                        window.restore();
+                                    } else {
+                                        window.maximize();
+                                    }
+                                }
+                                Button::Close => self.close_requested(&window.clone()),
+                            }
                         }
                     }
                 }
-            },
+            }
             WMEK::Press(MousePress::Middle) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
                     self.tab_drag_state = None;
@@ -1732,11 +1751,12 @@ mod tests {
     use super::{
         mouse_dispatch_target, should_preserve_tmux_bypass_reporting,
         should_suppress_wheel_during_terminal_selection, should_zoom_title_area,
-        MouseDispatchTarget,
+        tab_bar_item_starts_window_drag, MouseDispatchTarget,
     };
+    use crate::tabbar::TabBarItem;
     use crate::termwindow::MouseCapture;
     use mux::pane::PaneId;
-    use window::{Modifiers, MouseButtons, MousePress, WindowDecorations};
+    use window::{IntegratedTitleButton, Modifiers, MouseButtons, MousePress, WindowDecorations};
 
     #[test]
     fn terminal_capture_keeps_release_routed_to_terminal() {
@@ -1777,6 +1797,25 @@ mod tests {
             WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE,
             Some(1),
         ));
+    }
+
+    #[test]
+    fn tab_bar_tabs_and_controls_do_not_start_window_drags() {
+        assert!(!tab_bar_item_starts_window_drag(TabBarItem::Tab {
+            tab_idx: 1,
+            active: false,
+        }));
+        assert!(!tab_bar_item_starts_window_drag(TabBarItem::NewTabButton));
+        assert!(!tab_bar_item_starts_window_drag(TabBarItem::WindowButton(
+            IntegratedTitleButton::Close,
+        )));
+    }
+
+    #[test]
+    fn tab_bar_empty_and_status_regions_start_window_drags() {
+        assert!(tab_bar_item_starts_window_drag(TabBarItem::None));
+        assert!(tab_bar_item_starts_window_drag(TabBarItem::LeftStatus));
+        assert!(tab_bar_item_starts_window_drag(TabBarItem::RightStatus));
     }
 
     #[test]
