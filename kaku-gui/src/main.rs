@@ -104,6 +104,7 @@ mod download;
 mod frontend;
 mod glyphcache;
 mod inputmap;
+mod open_target;
 mod overlay;
 mod quad;
 mod renderstate;

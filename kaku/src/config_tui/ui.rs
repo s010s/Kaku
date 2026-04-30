@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
@@ -358,7 +358,7 @@ fn render_selector(frame: &mut ratatui::Frame, area: Rect, app: &App) {
     let longest_option_width = field
         .options
         .iter()
-        .map(|opt| opt.chars().count() as u16)
+        .map(|opt| opt.label.chars().count() as u16)
         .max()
         .unwrap_or(0);
     let popup_width = std::cmp::max(
@@ -399,7 +399,9 @@ fn render_selector(frame: &mut ratatui::Frame, area: Rect, app: &App) {
         .map(|(i, opt)| {
             let is_sel = i == select_index;
             let marker = if is_sel { "› " } else { "  " };
-            let style = if is_sel {
+            let style = if !opt.enabled {
+                Style::default().fg(Color::DarkGray)
+            } else if is_sel {
                 Style::default().fg(primary()).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(text_fg())
@@ -415,7 +417,7 @@ fn render_selector(frame: &mut ratatui::Frame, area: Rect, app: &App) {
                             Modifier::empty()
                         }),
                 ),
-                Span::styled(*opt, style),
+                Span::styled(opt.label, style),
             ]))
         })
         .collect();

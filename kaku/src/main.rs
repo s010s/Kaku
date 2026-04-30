@@ -33,6 +33,7 @@ mod config_tui;
 mod doctor;
 mod init;
 mod kaku_theme;
+mod open_target;
 mod reset;
 mod shell;
 mod tui_core;

@@ -241,6 +241,29 @@ enum Mode {
     Selecting,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConfigOption {
+    label: &'static str,
+    enabled: bool,
+}
+
+impl ConfigOption {
+    fn enabled(label: &'static str) -> Self {
+        Self {
+            label,
+            enabled: true,
+        }
+    }
+
+    #[cfg(test)]
+    fn disabled(label: &'static str) -> Self {
+        Self {
+            label,
+            enabled: false,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ConfigField {
     section: &'static str,
@@ -248,7 +271,7 @@ struct ConfigField {
     lua_key: &'static str,
     value: String,
     default: String,
-    options: Vec<&'static str>,
+    options: Vec<ConfigOption>,
     /// If true, the field's config line exists but could not be fully parsed.
     /// save_config will leave the line untouched to avoid corrupting user config.
     skip_write: bool,
@@ -257,6 +280,14 @@ struct ConfigField {
 impl ConfigField {
     fn has_options(&self) -> bool {
         !self.options.is_empty()
+    }
+
+    fn option_enabled(&self, label: &str) -> bool {
+        self.options
+            .iter()
+            .find(|option| option.label == label)
+            .map(|option| option.enabled)
+            .unwrap_or(false)
     }
 }
 
@@ -287,7 +318,11 @@ impl App {
                 lua_key: "color_scheme",
                 value: String::new(),
                 default: "Auto".into(),
-                options: vec!["Auto", "Kaku Dark", "Kaku Light"],
+                options: vec![
+                    ConfigOption::enabled("Auto"),
+                    ConfigOption::enabled("Kaku Dark"),
+                    ConfigOption::enabled("Kaku Light"),
+                ],
                 skip_write: false,
             },
             ConfigField {
@@ -327,12 +362,29 @@ impl App {
                 skip_write: false,
             },
             ConfigField {
+                section: "Integrations",
+                key: "Default Open Target",
+                lua_key: "default_open_target",
+                value: String::new(),
+                default: "Auto".into(),
+                options: vec![
+                    ConfigOption::enabled("Auto"),
+                    ConfigOption::enabled("Default app"),
+                    ConfigOption::enabled("Finder"),
+                    ConfigOption::enabled("Terminal"),
+                ],
+                skip_write: false,
+            },
+            ConfigField {
                 section: "Window",
                 key: "Tab Bar Position",
                 lua_key: "tab_bar_at_bottom",
                 value: String::new(),
                 default: "Bottom".into(),
-                options: vec!["Bottom", "Top"],
+                options: vec![
+                    ConfigOption::enabled("Bottom"),
+                    ConfigOption::enabled("Top"),
+                ],
                 skip_write: false,
             },
             ConfigField {
@@ -341,7 +393,7 @@ impl App {
                 lua_key: "tab_title_show_basename_only",
                 value: String::new(),
                 default: "Off".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -350,7 +402,7 @@ impl App {
                 lua_key: "enable_scroll_bar",
                 value: String::new(),
                 default: "Off".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -359,7 +411,7 @@ impl App {
                 lua_key: "__wdeco_traffic_lights__",
                 value: String::new(),
                 default: "On".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -368,7 +420,7 @@ impl App {
                 lua_key: "__wdeco_shadow__",
                 value: String::new(),
                 default: "On".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -395,7 +447,7 @@ impl App {
                 lua_key: "copy_on_select",
                 value: String::new(),
                 default: "On".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -404,7 +456,7 @@ impl App {
                 lua_key: "tab_close_confirmation",
                 value: String::new(),
                 default: "Off".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -413,7 +465,7 @@ impl App {
                 lua_key: "pane_close_confirmation",
                 value: String::new(),
                 default: "Off".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -422,7 +474,7 @@ impl App {
                 lua_key: "bell_tab_indicator",
                 value: String::new(),
                 default: "On".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -431,7 +483,7 @@ impl App {
                 lua_key: "bell_dock_badge",
                 value: String::new(),
                 default: "Off".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
             ConfigField {
@@ -440,7 +492,7 @@ impl App {
                 lua_key: "remember_last_cwd",
                 value: String::new(),
                 default: "On".into(),
-                options: vec!["On", "Off"],
+                options: vec![ConfigOption::enabled("On"), ConfigOption::enabled("Off")],
                 skip_write: false,
             },
         ];
@@ -475,6 +527,7 @@ impl App {
 
         let config_path = self.config_path();
         if !config_path.exists() {
+            self.detect_open_target_options();
             return;
         }
 
@@ -505,6 +558,45 @@ impl App {
 
         // Load window_decorations into the Traffic Lights / Shadow pseudo-fields.
         self.load_window_decorations(&content);
+        self.detect_open_target_options();
+    }
+
+    fn detect_open_target_options(&mut self) {
+        let current_open_target = self
+            .fields
+            .iter()
+            .find(|field| field.lua_key == "default_open_target")
+            .map(|field| self.display_value(field).to_string());
+        let detected =
+            crate::open_target::DetectedOpenTargets::detect(current_open_target.as_deref());
+        self.apply_open_target_options(
+            detected
+                .all_options()
+                .iter()
+                .map(|option| ConfigOption {
+                    label: option.label,
+                    enabled: option.enabled,
+                })
+                .collect(),
+        );
+    }
+
+    fn apply_open_target_options(&mut self, options: Vec<ConfigOption>) {
+        if let Some(field) = self
+            .fields
+            .iter_mut()
+            .find(|field| field.lua_key == "default_open_target")
+        {
+            field.options = options;
+            if !field.value.is_empty() && !field.option_enabled(&field.value) {
+                field.skip_write = true;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn apply_open_target_options_for_test(&mut self, options: Vec<ConfigOption>) {
+        self.apply_open_target_options(options);
     }
 
     /// Returns true if a non-commented `config.<key>` assignment exists in content.
@@ -792,7 +884,7 @@ impl App {
     /// format; the caller should set skip_write=true to protect the original line.
     fn normalize_value(lua_key: &str, raw: &str) -> Option<String> {
         match lua_key {
-            "color_scheme" | "font" => {
+            "color_scheme" | "font" | "default_open_target" => {
                 if raw.is_empty()
                     || raw.eq_ignore_ascii_case("nil")
                     || raw.eq_ignore_ascii_case("true")
@@ -945,10 +1037,13 @@ impl App {
                 let current_idx = field
                     .options
                     .iter()
-                    .position(|&o| o == current)
+                    .position(|option| option.label == current)
                     .unwrap_or(0);
                 let next_idx = (current_idx + 1) % 2;
-                let next_value = field.options[next_idx].to_string();
+                if !field.options[next_idx].enabled {
+                    return;
+                }
+                let next_value = field.options[next_idx].label.to_string();
                 self.fields[self.selected].value = next_value;
                 self.fields[self.selected].skip_write = false;
                 self.dirty = true;
@@ -958,7 +1053,8 @@ impl App {
                 self.select_index = field
                     .options
                     .iter()
-                    .position(|&o| o == current)
+                    .position(|option| option.label == current)
+                    .or_else(|| field.options.iter().position(|option| option.enabled))
                     .unwrap_or(0);
             }
         } else {
@@ -980,15 +1076,22 @@ impl App {
     }
 
     fn select_up(&mut self) {
-        if self.select_index > 0 {
-            self.select_index -= 1;
+        let field = &self.fields[self.selected];
+        if let Some(idx) = field.options[..self.select_index]
+            .iter()
+            .rposition(|option| option.enabled)
+        {
+            self.select_index = idx;
         }
     }
 
     fn select_down(&mut self) {
         let field = &self.fields[self.selected];
-        if self.select_index < field.options.len() - 1 {
-            self.select_index += 1;
+        if let Some(idx) = field.options[self.select_index.saturating_add(1)..]
+            .iter()
+            .position(|option| option.enabled)
+        {
+            self.select_index += idx + 1;
         }
     }
 
@@ -1022,14 +1125,19 @@ impl App {
     }
 
     fn confirm_select(&mut self) {
-        let selected_option = self.fields[self.selected].options[self.select_index];
+        let selected_option = &self.fields[self.selected].options[self.select_index];
+        let selected_label = selected_option.label;
         let current_value = self.display_value(&self.fields[self.selected]).to_string();
-        if current_value == selected_option {
+        if current_value == selected_label {
+            self.mode = Mode::Normal;
+            return;
+        }
+        if !selected_option.enabled {
             self.mode = Mode::Normal;
             return;
         }
 
-        self.fields[self.selected].value = selected_option.to_string();
+        self.fields[self.selected].value = selected_label.to_string();
         // Same: explicit user choice overrides the skip_write protection.
         self.fields[self.selected].skip_write = false;
         self.mode = Mode::Normal;
@@ -1336,6 +1444,7 @@ impl App {
                 }
             }
             "font" => format!("wezterm.font('{}')", field.value),
+            "default_open_target" => format!("'{}'", field.value),
             "font_size"
             | "line_height"
             | "window_background_opacity"
@@ -1447,8 +1556,8 @@ fn signal_config_changed() {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_editable_config_exists, normal_mode_action, App, Mode, NormalModeAction,
-        KAKU_AUTO_COLOR_SCHEME_EXPR,
+        ensure_editable_config_exists, normal_mode_action, App, ConfigOption, Mode,
+        NormalModeAction, KAKU_AUTO_COLOR_SCHEME_EXPR,
     };
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
@@ -1456,6 +1565,118 @@ mod tests {
 
     fn test_app() -> App {
         App::new(PathBuf::from("/tmp/kaku-config-tui-test.lua"))
+    }
+
+    #[test]
+    fn default_open_target_options_come_from_detection() {
+        let mut app = test_app();
+        app.apply_open_target_options_for_test(vec![
+            ConfigOption::enabled("Auto"),
+            ConfigOption::enabled("Cursor"),
+            ConfigOption::enabled("Finder"),
+        ]);
+
+        let field = app
+            .fields
+            .iter()
+            .find(|field| field.lua_key == "default_open_target")
+            .expect("default_open_target field");
+
+        assert_eq!(
+            field.options.iter().map(|o| o.label).collect::<Vec<_>>(),
+            vec!["Auto", "Cursor", "Finder"]
+        );
+        assert!(field.options.iter().all(|o| o.enabled));
+    }
+
+    #[test]
+    fn missing_current_open_target_is_disabled_and_preserved() {
+        let mut app = test_app();
+        app.apply_open_target_options_for_test(vec![
+            ConfigOption::enabled("Auto"),
+            ConfigOption::enabled("Finder"),
+            ConfigOption::disabled("Cursor"),
+        ]);
+        let idx = app
+            .fields
+            .iter()
+            .position(|field| field.lua_key == "default_open_target")
+            .expect("default_open_target field");
+
+        app.fields[idx].value = "Cursor".to_string();
+        assert_eq!(app.display_value(&app.fields[idx]), "Cursor");
+        assert!(!app.fields[idx].option_enabled("Cursor"));
+    }
+
+    #[test]
+    fn save_config_writes_default_open_target_when_non_default() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("kaku.lua");
+        std::fs::write(
+            &config_path,
+            "local wezterm = require 'wezterm'\nlocal config = {}\nreturn config\n",
+        )
+        .expect("write config");
+
+        let mut app = App::new(config_path.clone());
+        app.load_config();
+        let idx = app
+            .fields
+            .iter()
+            .position(|field| field.lua_key == "default_open_target")
+            .expect("default_open_target field");
+        app.fields[idx].value = "Finder".to_string();
+        app.fields[idx].skip_write = false;
+
+        app.save_config().expect("save_config");
+
+        let content = std::fs::read_to_string(&config_path).expect("read config");
+        assert!(
+            content.contains("config.default_open_target = 'Finder'"),
+            "expected Finder open target to be written, got:\n{}",
+            content
+        );
+    }
+
+    #[test]
+    fn missing_open_target_is_not_removed_when_unchanged() {
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("kaku.lua");
+        let preserved_line =
+            "config.default_open_target    =   \"Cursor\" -- keep disabled current target";
+        let original = format!(
+            "local wezterm = require 'wezterm'\nlocal config = {{}}\n{preserved_line}\nreturn config\n"
+        );
+        std::fs::write(&config_path, &original).expect("write config");
+
+        let mut app = App::new(config_path.clone());
+        app.load_config();
+        app.apply_open_target_options_for_test(vec![
+            ConfigOption::enabled("Auto"),
+            ConfigOption::enabled("Default app"),
+            ConfigOption::enabled("Finder"),
+            ConfigOption::enabled("Terminal"),
+            ConfigOption::disabled("Cursor"),
+        ]);
+        let idx = app
+            .fields
+            .iter()
+            .position(|field| field.lua_key == "default_open_target")
+            .expect("default_open_target field");
+
+        assert_eq!(app.fields[idx].value, "Cursor");
+        assert!(app.fields[idx].skip_write);
+
+        app.save_config().expect("save_config");
+
+        let content = std::fs::read_to_string(&config_path).expect("read config");
+        let expected = format!(
+            "local wezterm = require 'wezterm'\nlocal config = {{}}\n{preserved_line}\nconfig.tab_bar_at_bottom = true\nreturn config\n"
+        );
+        assert_eq!(
+            content, expected,
+            "missing current target config should be preserved exactly"
+        );
     }
 
     #[test]

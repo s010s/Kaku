@@ -222,6 +222,9 @@ pub struct Config {
     #[dynamic(default = "default_gui_startup_args")]
     pub default_gui_startup_args: Vec<String>,
 
+    #[dynamic(default)]
+    pub default_open_target: DefaultOpenTarget,
+
     /// Specifies the default current working directory if none is specified
     /// through configuration or OSC 7 (see docs for `default_cwd` for more
     /// info!)
@@ -2135,9 +2138,31 @@ fn default_harfbuzz_features() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::default_hyperlink_rules;
+    use super::{default_hyperlink_rules, Config, DefaultOpenTarget};
     use std::sync::Arc;
     use termwiz::hyperlink::{Hyperlink, Rule, RuleMatch};
+    use wezterm_dynamic::{FromDynamic, ToDynamic};
+
+    #[test]
+    fn default_open_target_defaults_to_auto() {
+        let cfg = Config::default();
+        assert_eq!(cfg.default_open_target, DefaultOpenTarget::Auto);
+    }
+
+    #[test]
+    fn default_open_target_round_trips_from_lua_string() {
+        let value = wezterm_dynamic::Value::String("Cursor".to_string());
+        let parsed =
+            DefaultOpenTarget::from_dynamic(&value, wezterm_dynamic::FromDynamicOptions::default())
+                .expect("parse Cursor target");
+        assert_eq!(parsed, DefaultOpenTarget::Cursor);
+
+        let serialized = parsed.to_dynamic();
+        assert_eq!(
+            serialized,
+            wezterm_dynamic::Value::String("Cursor".to_string())
+        );
+    }
 
     #[test]
     fn file_hyperlink_rule_matches_bare_relative_paths() {
@@ -2504,6 +2529,83 @@ impl DefaultCursorStyle {
             },
             _ => shape,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DefaultOpenTarget {
+    #[default]
+    Auto,
+    VsCode,
+    Cursor,
+    Windsurf,
+    Kiro,
+    Antigravity,
+    Zed,
+    IntelliJIdea,
+    DefaultApp,
+    Finder,
+    Terminal,
+    ITerm2,
+    Ghostty,
+    WezTerm,
+    Cmux,
+}
+
+impl DefaultOpenTarget {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::VsCode => "VS Code",
+            Self::Cursor => "Cursor",
+            Self::Windsurf => "Windsurf",
+            Self::Kiro => "Kiro",
+            Self::Antigravity => "Antigravity",
+            Self::Zed => "Zed",
+            Self::IntelliJIdea => "IntelliJ IDEA",
+            Self::DefaultApp => "Default app",
+            Self::Finder => "Finder",
+            Self::Terminal => "Terminal",
+            Self::ITerm2 => "iTerm2",
+            Self::Ghostty => "Ghostty",
+            Self::WezTerm => "WezTerm",
+            Self::Cmux => "cmux",
+        }
+    }
+}
+
+impl FromDynamic for DefaultOpenTarget {
+    fn from_dynamic(
+        value: &wezterm_dynamic::Value,
+        options: wezterm_dynamic::FromDynamicOptions,
+    ) -> Result<Self, wezterm_dynamic::Error> {
+        let s = String::from_dynamic(value, options)?;
+        match s.as_str() {
+            "Auto" => Ok(Self::Auto),
+            "VS Code" => Ok(Self::VsCode),
+            "Cursor" => Ok(Self::Cursor),
+            "Windsurf" => Ok(Self::Windsurf),
+            "Kiro" => Ok(Self::Kiro),
+            "Antigravity" => Ok(Self::Antigravity),
+            "Zed" => Ok(Self::Zed),
+            "IntelliJ IDEA" => Ok(Self::IntelliJIdea),
+            "Default app" => Ok(Self::DefaultApp),
+            "Finder" => Ok(Self::Finder),
+            "Terminal" => Ok(Self::Terminal),
+            "iTerm2" => Ok(Self::ITerm2),
+            "Ghostty" => Ok(Self::Ghostty),
+            "WezTerm" => Ok(Self::WezTerm),
+            "cmux" => Ok(Self::Cmux),
+            s => Err(wezterm_dynamic::Error::Message(format!(
+                "`{s}` is not a valid default open target"
+            ))),
+        }
+    }
+}
+
+impl ToDynamic for DefaultOpenTarget {
+    fn to_dynamic(&self) -> wezterm_dynamic::Value {
+        self.as_str().to_dynamic()
     }
 }
 

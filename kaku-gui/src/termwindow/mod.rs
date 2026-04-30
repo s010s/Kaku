@@ -58,7 +58,6 @@ use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -149,14 +148,6 @@ use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
 const ATLAS_SIZE: usize = 128;
-const VSCODE_OPEN_CANDIDATES: &[&str] = &[
-    "code",
-    "/usr/local/bin/code",
-    "/opt/homebrew/bin/code",
-    "/opt/local/bin/code",
-    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-];
-
 const TOP_TAB_LAYOUT_FULLSCREEN_STICKY_MS: u64 = 160;
 
 #[derive(Clone, Debug)]
@@ -4918,154 +4909,19 @@ impl TermWindow {
     }
 
     fn open_file_link_target(target: &FileLinkTarget) -> anyhow::Result<()> {
-        if target.path.is_file() && Self::try_open_file_in_vscode(target)? {
-            return Ok(());
-        }
-
-        if Self::try_open_in_configured_editor(&target.path)? {
-            return Ok(());
-        }
-
-        if Self::try_open_path_in_vscode(&target.path)? {
-            return Ok(());
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            if Self::try_open_path_with_default_app(&target.path)? {
-                return Ok(());
-            }
-
-            if target.path.is_file() && Self::try_open_text(&target.path)? {
-                return Ok(());
-            }
-
-            if target.path.is_file() && Self::try_reveal_in_finder(&target.path)? {
-                return Ok(());
-            }
-        }
-
-        anyhow::bail!("failed to open {}", target.path.display())
-    }
-
-    fn try_open_file_in_vscode(target: &FileLinkTarget) -> anyhow::Result<bool> {
-        let Some(line) = target.line else {
-            return Ok(false);
+        let open_target = crate::open_target::FileOpenTarget {
+            path: target.path.clone(),
+            line: target.line,
+            col: target.col,
+            is_dir: target.path.is_dir(),
         };
 
-        let mut location = format!("{}:{line}", target.path.display());
-        if let Some(col) = target.col {
-            location.push(':');
-            location.push_str(&col.to_string());
-        }
-
-        for candidate in VSCODE_OPEN_CANDIDATES {
-            let result = std::process::Command::new(candidate)
-                .arg("-g")
-                .arg(&location)
-                .status();
-
-            match result {
-                Ok(status) if status.success() => return Ok(true),
-                Ok(_) => return Ok(false),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(err.into()),
-            }
-        }
-
-        Ok(false)
-    }
-
-    fn try_open_in_configured_editor(path: &Path) -> anyhow::Result<bool> {
-        for var in ["VISUAL", "EDITOR"] {
-            if Self::try_open_in_env_editor(var, path)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
-    fn try_open_in_env_editor(var: &str, path: &Path) -> anyhow::Result<bool> {
-        let Some(raw) = std::env::var_os(var) else {
-            return Ok(false);
-        };
-
-        let raw = raw.to_string_lossy();
-        let (program, args) =
-            Self::parse_editor_command(raw.trim()).with_context(|| format!("parse ${var}"))?;
-
-        Self::run_path_command(&program, &args, path)
-            .with_context(|| format!("launch ${var} editor `{program}`"))?;
-        Ok(true)
-    }
-
-    fn parse_editor_command(raw: &str) -> anyhow::Result<(String, Vec<String>)> {
-        let parts = shlex::split(raw).context("invalid shell quoting")?;
-        let Some((program, args)) = parts.split_first() else {
-            anyhow::bail!("editor command is empty");
-        };
-        Ok((program.clone(), args.to_vec()))
-    }
-
-    fn try_open_path_in_vscode(path: &Path) -> anyhow::Result<bool> {
-        for candidate in VSCODE_OPEN_CANDIDATES {
-            let result = Command::new(candidate).arg(path).status();
-
-            match result {
-                Ok(status) if status.success() => return Ok(true),
-                Ok(_) => return Ok(false),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(err) => return Err(err.into()),
-            }
-        }
-
-        Ok(false)
-    }
-
-    #[cfg(target_os = "macos")]
-    fn try_open_text(path: &Path) -> anyhow::Result<bool> {
-        match Self::run_path_command("/usr/bin/open", &["-t".to_string()], path) {
-            Ok(()) => Ok(true),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err).context("launch macOS text editor"),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn try_open_path_with_default_app(path: &Path) -> anyhow::Result<bool> {
-        match Self::run_path_command("/usr/bin/open", &[], path) {
-            Ok(()) => Ok(true),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err).context("launch default app"),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn try_reveal_in_finder(path: &Path) -> anyhow::Result<bool> {
-        match Self::run_path_command("/usr/bin/open", &["-R".to_string()], path) {
-            Ok(()) => Ok(true),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(err).context("reveal file in Finder"),
-        }
-    }
-
-    fn run_path_command(program: &str, args: &[String], path: &Path) -> std::io::Result<()> {
-        let status = Command::new(program)
-            .args(args)
-            .arg(path)
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()?;
-
-        if status.success() {
-            return Ok(());
-        }
-
-        Err(std::io::Error::other(format!(
-            "`{program}` exited with status {status}"
-        )))
+        let mut runner = crate::open_target::ProcessCommandRunner;
+        crate::open_target::open_with_runner(
+            config::configuration().default_open_target,
+            &open_target,
+            &mut runner,
+        )
     }
 
     fn parse_file_location(path: &str) -> (String, Option<usize>, Option<usize>) {
@@ -6002,20 +5858,6 @@ mod tests {
         assert_eq!(path, "/tmp/demo.rs");
         assert_eq!(line, None);
         assert_eq!(col, None);
-    }
-
-    #[test]
-    fn parse_editor_command_extracts_program_and_flags() {
-        let (program, args) =
-            TermWindow::parse_editor_command(r#"code -g "/tmp/demo.rs:12:3""#).unwrap();
-        assert_eq!(program, "code");
-        assert_eq!(args, vec!["-g", "/tmp/demo.rs:12:3"]);
-    }
-
-    #[test]
-    fn parse_editor_command_rejects_empty_value() {
-        let err = TermWindow::parse_editor_command("   ").unwrap_err();
-        assert!(err.to_string().contains("editor command is empty"));
     }
 
     #[test]
